@@ -1,2 +1,2 @@
-# Dota2-Match-Analysis
-Dota 2 Match Analysis and Prediction Tool
+# Dota 2 Match Analysis and Prediction Tool
+A tool that can be used to analyse and predict outcomes of matches in Dota 2.
