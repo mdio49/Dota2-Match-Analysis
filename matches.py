@@ -5,6 +5,7 @@
 ################################################################
 
 import argparse, os, requests, json
+from constants import cluster
 from enum import Enum
 
 # The list of heroes with their corresponding ID and aliases.
@@ -54,27 +55,24 @@ class Team(Enum):
 class Match:
     def __init__(self, data, api='steampowered'):
         self.match_id = None if 'match_id' not in data.keys() else data['match_id']
+        self.seq_num = None if 'match_seq_num' not in data.keys() else data['match_seq_num']
         self.game_mode = None if 'game_mode' not in data.keys() else data['game_mode']
+        self.start_time = None if 'start_time' not in data.keys() else data['start_time']
         self.duration = None if 'duration' not in data.keys() else (data['duration'] / 60.0)
         self.winner = None if 'radiant_win' not in data.keys() else Team.Radiant if data['radiant_win'] else Team.Dire
 
         self.players = []
         if 'players' in data.keys():
             for player in data['players']:
-                self.players.append(Player(player, api=api))
+                self.players.append(Player(player))
 
-        self.patch = None
-        self.skill = None
-        self.region = None
+        self.patch = None if 'patch' not in data.keys() else data['patch']
+        self.skill = None if 'skill' not in data.keys() else data['skill']
+        self.region = None if 'region' not in data.keys() else data['region']
 
-        if api == 'steampowered':
-            # TODO
-            pass
-            
-        if api == 'opendota':
-            self.patch = None if 'patch' not in data.keys() else data['patch']
-            self.skill = None if 'skill' not in data.keys() else data['skill']
-            self.region = None if 'region' not in data.keys() else data['region']
+        # If the data does not contain the 'region' key, then try to extract the region from the 'cluster' key.
+        if self.region is None:
+            self.region = None if 'cluster' not in data.keys() else cluster(data['cluster'])
 
     # Gets the heroes on each side of the match.
     def get_heroes(self):
@@ -88,8 +86,8 @@ class Match:
 
 # A class that processes player data in a match.
 class Player:
-    def __init__(self, data, api='steampowered'):
-        self.account_id = data['account_id']
+    def __init__(self, data):
+        self.account_id = None if 'account_id' not in data else data['account_id']
         self.hero_id = data['hero_id']
         self.kills = data['kills']
         self.deaths = data['deaths']
@@ -104,20 +102,37 @@ class Player:
         self.slot = player_slot & 0b111
 
 # Fetches the data for a single match in JSON format.
-def fetch_match(match_id, api='steampowered', key=None):
+def fetch_match(match_id, api='steampowered', keys={}):
     if api == 'steampowered':
-        url = f"https://api.steampowered.com/IDOTA2Match_570/GetMatchDetails/V001/?match_id={match_id}&key={key}"
+        url = f"https://api.steampowered.com/IDOTA2Match_570/GetMatchDetails/V001/?match_id={match_id}&key={keys['steampowered']}"
         r = requests.get(url)
         return json.loads(r.text)['result']
     elif api == 'opendota':
         url = f"https://api.opendota.com/api/matches/{match_id}"
         r = requests.get(url)
         return json.loads(r.text)
+    elif api == 'rapidapi':
+        url = "https://community-dota-2.p.rapidapi.com/IDOTA2Match_570/GetMatchDetails/V001/"
+        querystring = {'match_id': match_id, 'key': keys['steampowered']}
+        headers = {
+            'x-rapidapi-host': "community-dota-2.p.rapidapi.com",
+            'x-rapidapi-key': keys['rapidapi']
+        }
+        response = requests.request("GET", url, headers=headers, params=querystring)
+        return json.loads(response.text)['result']
     return json.loads("{}")
 
 # Gets a hero's id by their name.
 def get_hero_by_name(hero):
     return next((x for x in HEROES.keys() if hero.lower() in [y.lower() for y in HEROES[x]]), 0)
+
+# Get the API keys.
+def get_keys(path):
+    keys = {}
+    if os.path.exists(path):
+        with open(path, "r") as file:
+            keys = json.load(file)
+    return keys
 
 # The main entry point to the program. This program mainly handles data collection and fetching.
 def main():
@@ -131,13 +146,8 @@ def main():
     parser.add_argument("-get", metavar="ID", type=int, help="Fetches data for a single match with the given ID.")
     args = parser.parse_args()
 
-    # Get the API key.
-    key = None
-    if os.path.exists("keys.json"):
-        with open("keys.json", "r") as file:
-            keys = json.load(file)
-            if args.api in keys:
-                key = keys[args.api]
+    # Get the API keys.
+    keys = get_keys("keys.json")
 
     # Bulk fetching of data.
     if args.fetch:
@@ -153,7 +163,7 @@ def main():
                 print(f"Data for match ID {match_id} already exists. Skipping.")
                 match_id += 1
             else:
-                data = fetch_match(match_id, api=args.api, key=key)
+                data = fetch_match(match_id, api=args.api, keys=keys)
                 error = data['error'] if 'error' in data.keys() else None
                 if args.api == 'opendota' and error == 'rate limit exceeded':
                     if rate_limit == False:
@@ -171,7 +181,7 @@ def main():
     
     # Fetch data for a single match.
     if args.get:
-        data = fetch_match(args.get, api=args.api, key=key)
+        data = fetch_match(args.get, api=args.api, keys=keys)
         if 'error' in data.keys():
             print(f"Failed to retrieve data for match ID {args.get}: {data['error']}")
             exit()

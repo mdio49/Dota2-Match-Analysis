@@ -3,15 +3,61 @@ from matches import *
 
 HEROES_LIST = list(collections.OrderedDict(sorted(HEROES.items(), key=lambda t: t[0])).keys())
 
-class D2Pred(torch.nn.Module):
+# A single layer network that simply computes a linear sum of the inputs.
+class D2PredLinear(torch.nn.Module):
     def __init__(self):
-        super(D2Pred, self).__init__()
+        super(D2PredLinear, self).__init__()
+        self.out = torch.nn.Sequential(
+            torch.nn.Linear(N_HEROES * 2, 1),
+            torch.nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        output = self.out(x)
+        return output.reshape(len(x[:,0]))
+    
+    def init_weights(self, a, b):
+        for m in self.out.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+
+# A two-layer fully connected network.
+class D2PredFull(torch.nn.Module):
+    def __init__(self, num_hid):
+        super(D2PredFull, self).__init__()
         self.hid1 = torch.nn.Sequential(
-            torch.nn.Linear(N_HEROES * 2, 512),
+            torch.nn.Linear(N_HEROES * 2, num_hid),
             torch.nn.Tanh()
         )
         self.out = torch.nn.Sequential(
-            torch.nn.Linear(512 + (N_HEROES * 2), 1),
+            torch.nn.Linear(num_hid, 1),
+            torch.nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        hid1 = self.hid1(x)
+        output = self.out(hid1)
+        return output.reshape(len(x[:,0]))
+    
+    def init_weights(self, a, b):
+        for m in self.hid1.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+        
+        for m in self.out.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+
+# A two-layer fully connected network with shortcut connections between the input and output layer.
+class D2PredShort(torch.nn.Module):
+    def __init__(self, num_hid):
+        super(D2PredShort, self).__init__()
+        self.hid1 = torch.nn.Sequential(
+            torch.nn.Linear(N_HEROES * 2, num_hid),
+            torch.nn.Tanh()
+        )
+        self.out = torch.nn.Sequential(
+            torch.nn.Linear(num_hid + (N_HEROES * 2), 1),
             torch.nn.Sigmoid()
         )
 

@@ -1,9 +1,10 @@
 import argparse, torch
 import numpy as np
+import pandas as pd
 from d2pred import *
 from matches import *
 
-def list_winrates(radiant):
+def list_ratings(radiant):
     print("-- Individual Hero Ratings --")
     ratings = []
     net = torch.load("model.dat")
@@ -39,14 +40,38 @@ def main():
     parser.add_argument("-predict", action='store_true', default=False, help="Make a prediciton given a list of heroes.")
     parser.add_argument("-list_radiant", action='store_true', default=False, help="Lists ratings for heroes on the radiant side.")
     parser.add_argument("-list_dire", action='store_true', default=False, help="Lists ratings for heroes on the dire side.")
+    parser.add_argument("-winrates", action='store_true', default=False, help="Lists raw winrates for each hero.")
     args = parser.parse_args()
 
     if args.list_radiant:
-        list_winrates(True)
+        list_ratings(True)
     elif args.list_dire:
-        list_winrates(False)
-    
-    if args.predict:
+        list_ratings(False)
+    elif args.winrates:
+        df = pd.read_csv("data/matches.csv")
+        winrates = []
+        for h, names in HEROES.items():
+            # Get all matches which the hero participated in.
+            matches_R = df[(df['r1'] == h) | (df['r2'] == h) | (df['r3'] == h) | (df['r4'] == h) | (df['r5'] == h)]
+            matches_D = df[(df['d1'] == h) | (df['d2'] == h) | (df['d3'] == h) | (df['d4'] == h) | (df['d5'] == h)]
+            matches = pd.concat([matches_R, matches_D])
+            
+            # Of those matches, find the matches where the hero won.
+            won = pd.concat([matches_R[matches_R['winner'] == "R"], matches_D[matches_D['winner'] == "D"]])
+            
+            if not matches.empty:
+                # Calculate the win rate.
+                win_rate = len(won.index) / len(matches.index)
+
+                # Store the win rate in the list.
+                winrates.append((names[0], win_rate))
+        
+        # Sort the win rates in ascending order and display them to the screen.
+        winrates.sort(key=lambda x: x[1], reverse=True)
+        for hero, win_rate in winrates:
+            print("{0:20}\t{1}".format(hero, ("%.2f%%" % (win_rate * 100))))
+
+    elif args.predict:
         # Ask the user for some heroes.
         print("Radiant Heroes:")
         radiant_heroes = get_team()

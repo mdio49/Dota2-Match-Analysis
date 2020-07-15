@@ -16,7 +16,7 @@ def main():
     args = parser.parse_args()
 
     # Load the data frame,
-    df = pd.read_csv("data.csv")
+    df = pd.read_csv("data/matches.csv")
     if args.patch:
         df = df[df['patch'] == args.patch]
 
