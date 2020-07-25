@@ -1,0 +1,7 @@
+{
+    "name": "Bayesian",
+    "type": "bayesian",
+    "data": {
+        "table": "cache/bayesian_table.json"
+    }
+}

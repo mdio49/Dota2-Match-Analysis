@@ -8,11 +8,22 @@ import pandas as pd
 import torch.nn.functional as F
 from d2pred import *
 from matches import *
+from model import *
 
 COLUMNS = ['id','seq_num','start_time','gm','region','r1','r2','r3','r4','r5','d1','d2','d3','d4','d5','duration','winner']
 HEROES_INDEX = 5
 DURATION_INDEX = 15
 WINNER_INDEX = 16
+
+# A neural network defined from a PyTorch data file.
+class NeuralNetwork(Model):
+    def __init__(self, path):
+        self.net = torch.load(path)
+    
+    # Makes a prediction given the match data.
+    def predict(self, match):
+        # TODO
+        pass
 
 # Trains the network with the given arguments.
 def train(args):

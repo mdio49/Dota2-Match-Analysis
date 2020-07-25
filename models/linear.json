@@ -1,0 +1,7 @@
+{
+    "name": "Linear Network",
+    "type": "neural",
+    "data": {
+        "path": "model.dat"
+    }
+}
