@@ -103,6 +103,7 @@ class NetworkShort(torch.nn.Module):
 def get_hero_index(id, radiant=True):
     return HEROES_LIST.index(int(id)) + (0 if radiant else N_HEROES)
 
+# Normalises the output to give a sensible rating.
 def get_normalised_output(output):
     norm = (output - 0.5) * 2
     return ("+%7.4f" % norm) if norm > 0 else ("%7.4f" % norm)
