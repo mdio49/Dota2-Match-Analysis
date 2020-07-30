@@ -1,7 +1,7 @@
 import argparse, torch
 import numpy as np
 import pandas as pd
-from d2pred import *
+from neural import *
 from matches import *
 
 def list_ratings(radiant):

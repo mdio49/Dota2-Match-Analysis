@@ -1,6 +1,5 @@
 import argparse
 import pandas as pd
-from d2pred import *
 from matches import *
 
 def get_rating_str(rating):
