@@ -2,11 +2,10 @@
 # A program that uses a neural network to make predictions.
 ################################################################
 
-import argparse, glob, gzip, json, math, os, torch
+import argparse, collections, glob, gzip, json, math, os, torch
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
-from d2pred import *
 from matches import *
 from model import *
 
@@ -14,6 +13,8 @@ COLUMNS = ['id','seq_num','start_time','gm','region','r1','r2','r3','r4','r5','d
 HEROES_INDEX = 5
 DURATION_INDEX = 15
 WINNER_INDEX = 16
+
+HEROES_LIST = list(collections.OrderedDict(sorted(HEROES.items(), key=lambda t: t[0])).keys())
 
 # A neural network defined from a PyTorch data file.
 class NeuralNetwork(Model):
@@ -25,6 +26,87 @@ class NeuralNetwork(Model):
         # TODO
         pass
 
+# A single layer network that simply computes a linear sum of the inputs.
+class NetworkLinear(torch.nn.Module):
+    def __init__(self):
+        super(NetworkLinear, self).__init__()
+        self.out = torch.nn.Sequential(
+            torch.nn.Linear(N_HEROES * 2, 2),
+            torch.nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        output = self.out(x)
+        return output
+    
+    def init_weights(self, a, b):
+        for m in self.out.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+
+# A two-layer fully connected network.
+class NetworkFull(torch.nn.Module):
+    def __init__(self, num_hid):
+        super(NetworkFull, self).__init__()
+        self.hid1 = torch.nn.Sequential(
+            torch.nn.Linear(N_HEROES * 2, num_hid),
+            torch.nn.Tanh()
+        )
+        self.out = torch.nn.Sequential(
+            torch.nn.Linear(num_hid, 2),
+            torch.nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        hid1 = self.hid1(x)
+        output = self.out(hid1)
+        return output
+    
+    def init_weights(self, a, b):
+        for m in self.hid1.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+        
+        for m in self.out.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+
+# A two-layer fully connected network with shortcut connections between the input and output layer.
+class NetworkShort(torch.nn.Module):
+    def __init__(self, num_hid):
+        super(NetworkShort, self).__init__()
+        self.hid1 = torch.nn.Sequential(
+            torch.nn.Linear(N_HEROES * 2, num_hid),
+            torch.nn.Tanh()
+        )
+        self.out = torch.nn.Sequential(
+            torch.nn.Linear(num_hid + (N_HEROES * 2), 2),
+            torch.nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        hid1_out = self.hid1(x)
+        out_input = torch.cat((x, hid1_out), dim=1)
+        output = self.out(out_input)
+        return output
+    
+    def init_weights(self, a, b):
+        for m in self.hid1.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+        
+        for m in self.out.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+
+# Gets the index of a particular hero on a particular team for use in the network.
+def get_hero_index(id, radiant=True):
+    return HEROES_LIST.index(int(id)) + (0 if radiant else N_HEROES)
+
+def get_normalised_output(output):
+    norm = (output - 0.5) * 2
+    return ("+%7.4f" % norm) if norm > 0 else ("%7.4f" % norm)
+    
 # Trains the network with the given arguments.
 def train(args):
     # Set up the network.
@@ -33,11 +115,11 @@ def train(args):
     device = torch.device('cuda' if use_cuda else 'cpu')
     net = None
     if args.net == 'linear':
-        net = D2PredLinear().to(device)
+        net = NetworkLinear().to(device)
     elif args.net == 'full':
-        net = D2PredFull(args.hid).to(device)
+        net = NetworkFull(args.hid).to(device)
     elif args.net == 'short':
-        net = D2PredShort(args.hid).to(device)
+        net = NetworkShort(args.hid).to(device)
     else:
         print("Invalid model specified.")
         exit()
@@ -53,10 +135,10 @@ def train(args):
     X_train = None; Y_train = None; X_test = None; Y_test = None
     if args.use_cache:
         print("Retrieving data from cache.")
-        X_train = torch.load("cache/X_train.pt")
-        Y_train = torch.load("cache/Y_train.pt")
-        X_test = torch.load("cache/X_test.pt")
-        Y_test = torch.load("cache/Y_test.pt")
+        X_train = torch.load("cache/X_train.pt", map_location=device)
+        Y_train = torch.load("cache/Y_train.pt", map_location=device)
+        X_test = torch.load("cache/X_test.pt", map_location=device)
+        Y_test = torch.load("cache/Y_test.pt", map_location=device)
     else:
         # Collect the raw data from the CSV files.
         print("Collecting data.")
@@ -65,8 +147,8 @@ def train(args):
 
         # Create the tensors.
         print("Creating tensors.")
-        X_train, Y_train = create_tensors(train, args.batch_size)
-        X_test, Y_test = create_tensors(test, 64)
+        X_train, Y_train = create_tensors(train, args.batch_size, device)
+        X_test, Y_test = create_tensors(test, 64, device)
 
         # Cache the data.
         if not args.no_cache:
@@ -121,16 +203,17 @@ def train(args):
     torch.save(net, 'model.dat')
     print("Training complete. Network saved to 'model.dat'.")
 
-# Creates the tensors 
-def create_tensors(data, batch_size):
-    # Convert the data into a numpy array, replacing radiant with 1 and dire with 0.
-    data = data.replace({'winner': 'R'}, 1).replace({'winner': 'D'}, 0).to_numpy()
+# Creates the tensors.
+def create_tensors(data, batch_size, device):
+    # Convert the data into a numpy array, replacing radiant with 0 and dire with 1.
+    data = data.replace({'winner': 'R'}, 0).replace({'winner': 'D'}, 1).to_numpy()
 
     # Create the input and output tensors for the given data.
     X = []; Y = []; k = 0
     while k < data.shape[0]:
         end = min(k + batch_size, data.shape[0])
         X_in = np.zeros((end - k, N_HEROES * 2))
+        Y_in = np.zeros((end - k, 2))
         for i in range(0, end - k):
             row = data[k + i, HEROES_INDEX:(HEROES_INDEX + 10)]
             for j in row[0:5]:
@@ -139,9 +222,9 @@ def create_tensors(data, batch_size):
             for j in row[5:10]:
                 index = get_hero_index(j, radiant=False)
                 X_in[i, index] = 1
-        Y_in = data[k:end, WINNER_INDEX].astype(int)
-        X.append(torch.from_numpy(X_in).float())
-        Y.append(torch.from_numpy(Y_in).float())
+            Y_in[i, int(data[k + i, WINNER_INDEX])] = 1
+        X.append(torch.tensor(X_in, device=device).float())
+        Y.append(torch.tensor(Y_in, device=device).float())
         k += batch_size
     
     return X, Y
@@ -158,13 +241,15 @@ def get_performance(net, X_test, Y_test, threshold=0.0):
             for j in range(0, len(output)):
                 pred = output[j]
                 correct = target[j]
-                if (abs(pred - 0.5) >= threshold):
-                    if (correct == 1 and pred >= 0.5) or (correct == 0 and pred <= 0.5):
+                rating = (pred[0] - pred[1]) / (pred[0] + pred[1])
+                target_rating = 1 if correct[0] == 1 else -1
+                if (1 - abs(rating) >= threshold):
+                    if (target_rating == 1 and rating >= 0) or (target_rating == -1 and rating <= 0):
                         n_correct += 1
                     n_thresh += 1
 
-                error_sum += abs(pred - correct)
-                rmse_sum += (pred - correct) * (pred - correct)
+                error_sum += (1/2) * abs(rating - target_rating)
+                rmse_sum += (1/2) * (rating - target_rating) * (rating - target_rating)
                 n_total += 1
     
     accuracy = (n_correct / n_thresh) * 100
@@ -229,12 +314,12 @@ def main():
     parser.add_argument("-split", metavar="PATH", type=str, help="Takes a dataset and splits it randomly into training and test data.")
     parser.add_argument("--frac", type=float, default=0.9, help="The proportion of that dataset to take as training data.")
     parser.add_argument("-train", action="store_true", default=False, help="Trains the network using the files 'train.csv' and 'test.csv'.")
-    parser.add_argument('--net', type=str, default='short', help='The network model to use for training.')
+    parser.add_argument('--net', type=str, default='full', help='The network model to use for training.')
     parser.add_argument('--hid', type=int, default=100, help='The number of hidden nodes to use.')
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs.")
     parser.add_argument("--batch_size", metavar="SIZE", type=int, default=50, help="The maximum size of each batch.")
     parser.add_argument("--lr", type=float, default=0.1, help="Learning rate.")
-    parser.add_argument("--mom", type=float, default=0.2, help="Momentum.")
+    parser.add_argument("--mom", type=float, default=0.1, help="Momentum.")
     parser.add_argument('--no_cuda', action='store_true', default=False, help='Disables CUDA.')
     parser.add_argument('--use_cache', action='store_true', default=False, help='Loads the tensors from cache as opposed to preprocessing the data from scratch.')
     parser.add_argument('--no_cache', action='store_true', default=False, help='Tensors will not be cached for the current run if this flag is used.')
