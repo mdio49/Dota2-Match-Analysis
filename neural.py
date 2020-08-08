@@ -23,8 +23,43 @@ class NeuralNetwork(Model):
     
     # Makes a prediction given the match data.
     def predict(self, match):
-        # TODO
-        pass
+        # Parse the data for the given match.
+        data = pd.DataFrame.from_records([process_match_data(match)], columns=COLUMNS)
+        
+        # Pass the prediction into the model.
+        X, Y = create_tensors(data, 'cpu')
+        output = self.net(X)
+
+        # Return the prediction.
+        pred = Team.Radiant if output[0,0] >= output[0,1] else Team.Dire
+        rating = get_normalised_output(output)
+        return pred, rating
+    
+    def predict_heroes(self, radiant_heroes, dire_heroes):
+        # Pad the list of heroes if it's too short.
+        R = radiant_heroes + ([0] * (5 - len(radiant_heroes)))
+        D = dire_heroes + ([0] * (5 - len(dire_heroes)))
+        
+        # Create a fake match with the given heroes.
+        match = Match({'match_id': 0})
+        match.winner = Team.Radiant
+        for index in range(0, 10):
+            hero = D[index - 5] if index >= 5 else R[index]
+            player = Player({'hero_id': hero})
+            player.team = Team.Dire if index >= 5 else Team.Radiant
+            match.players.append(player)
+        
+        # Parse the data for the given match.
+        data = pd.DataFrame.from_records([process_match_data(match)], columns=COLUMNS)
+        
+        # Pass the prediction into the model.
+        X, Y = create_tensors(data, 'cpu')
+        output = self.net(X)[0]
+
+        # Return the prediction.
+        pred = Team.Radiant if output[0] >= output[1] else Team.Dire
+        rating = get_normalised_output(output)
+        return pred, rating
 
 # A single layer network that simply computes a linear sum of the inputs.
 class NetworkLinear(torch.nn.Module):
@@ -99,14 +134,45 @@ class NetworkShort(torch.nn.Module):
             if isinstance(m, torch.nn.Linear):
                 m.weight.data.normal_(a, b)
 
+# A network with two hidden layers.
+class NetworkThree(torch.nn.Module):
+    def __init__(self, num_hid):
+        super(NetworkFull, self).__init__()
+        self.hid1 = torch.nn.Sequential(
+            torch.nn.Linear(N_HEROES * 2, num_hid),
+            torch.nn.Tanh()
+        )
+        self.hid2 = torch.nn.Sequential(
+            torch.nn.Linear(num_hid, num_hid),
+            torch.nn.Tanh()
+        )
+        self.out = torch.nn.Sequential(
+            torch.nn.Linear(num_hid, 2),
+            torch.nn.Softmax(dim=1)
+        )
+
+    def forward(self, x):
+        hid1 = self.hid1(x)
+        hid2 = self.hid2(hid1)
+        output = self.out(hid2)
+        return output
+    
+    def init_weights(self, a, b):
+        for m in self.hid1.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+        
+        for m in self.out.modules():
+            if isinstance(m, torch.nn.Linear):
+                m.weight.data.normal_(a, b)
+
 # Gets the index of a particular hero on a particular team for use in the network.
 def get_hero_index(id, radiant=True):
     return HEROES_LIST.index(int(id)) + (0 if radiant else N_HEROES)
 
 # Normalises the output to give a sensible rating.
 def get_normalised_output(output):
-    norm = (output - 0.5) * 2
-    return ("+%7.4f" % norm) if norm > 0 else ("%7.4f" % norm)
+    return abs(output[0] - output[1]) / (output[0] + output[1])
     
 # Trains the network with the given arguments.
 def train(args):
@@ -120,6 +186,8 @@ def train(args):
     elif args.net == 'full':
         net = NetworkFull(args.hid).to(device)
     elif args.net == 'short':
+        net = NetworkShort(args.hid).to(device)
+    elif args.net == 'three':
         net = NetworkShort(args.hid).to(device)
     else:
         print("Invalid model specified.")
@@ -148,8 +216,8 @@ def train(args):
 
         # Create the tensors.
         print("Creating tensors.")
-        X_train, Y_train = create_tensors(train, args.batch_size, device)
-        X_test, Y_test = create_tensors(test, 64, device)
+        X_train, Y_train = create_tensors(train, device)
+        X_test, Y_test = create_tensors(test, device)
 
         # Cache the data.
         if not args.no_cache:
@@ -161,8 +229,17 @@ def train(args):
             torch.save(X_test, "cache/X_test.pt")
             torch.save(Y_test, "cache/Y_test.pt")
     
+    # Take a random sample of the training data (for performance purposes).
+    if args.sample > 0:
+        print(f"Taking a sample of {args.sample} matches for training.")
+        permutation = torch.randperm(X_train.size()[0])
+        sample_size = min(args.sample, X_train.size()[0])
+        sample = permutation[0:sample_size]
+        X_train = X_train[sample]
+        Y_train = Y_train[sample]
+    
     # Print the initial performance for control purposes.
-    accuracy, error, rmse = get_performance(net, X_test, Y_test, threshold=args.acc_thresh)
+    accuracy, error, rmse = get_performance(net, X_test, Y_test)
     print('Initial performance for control:')
     print('  accuracy = %7.4f%%' % accuracy)
     print('  error = %7.4f' % error)
@@ -173,9 +250,13 @@ def train(args):
     loss_sum = 0; loss_N = 0
     for epoch in range(0, args.epochs):
         # Train the network on the training data.
-        for i in range(0, len(X_train)):
+        permutation = torch.randperm(X_train.size()[0])
+        for i in range(0, X_train.size()[0], args.batch_size):
+            # Extract the current mini-batch of data.
+            batch = permutation[i:i+args.batch_size]
+            data, target = X_train[batch], Y_train[batch]
+
             # Pass the data into the network and perform backpropagation.
-            data, target = X_train[i], Y_train[i]
             optimizer.zero_grad()
             output = net(data)
             loss = F.binary_cross_entropy(output, target)
@@ -191,9 +272,9 @@ def train(args):
         
         # Print the loss and performance at regular intervals.
         if (epoch + 1) % args.eval_interval == 0:
-            accuracy, error, rmse = get_performance(net, X_test, Y_test, threshold=args.acc_thresh)
+            accuracy, error, rmse = get_performance(net, X_test, Y_test)
             print('ep%3d: loss = %7.4f' % (epoch + 1, loss.item()))
-            print(('  accuracy = %7.4f%%' % accuracy) + (f" (with threshold = {args.acc_thresh})" if args.acc_thresh > 0 else ""))
+            print('  accuracy = %7.4f%%' % accuracy)
             print('  error = %7.4f' % error)
             print('  RMS error: %7.4f' % rmse)
         
@@ -205,28 +286,24 @@ def train(args):
     print("Training complete. Network saved to 'model.dat'.")
 
 # Creates the tensors.
-def create_tensors(data, batch_size, device):
+def create_tensors(data, device):
     # Convert the data into a numpy array, replacing radiant with 0 and dire with 1.
     data = data.replace({'winner': 'R'}, 0).replace({'winner': 'D'}, 1).to_numpy()
 
     # Create the input and output tensors for the given data.
-    X = []; Y = []; k = 0
-    while k < data.shape[0]:
-        end = min(k + batch_size, data.shape[0])
-        X_in = np.zeros((end - k, N_HEROES * 2))
-        Y_in = np.zeros((end - k, 2))
-        for i in range(0, end - k):
-            row = data[k + i, HEROES_INDEX:(HEROES_INDEX + 10)]
-            for j in row[0:5]:
+    X = torch.zeros((data.shape[0], N_HEROES * 2), device=device).float()
+    Y = torch.zeros((data.shape[0], 2), device=device).float()
+    for k in range(0, data.shape[0]):
+        row = data[k, HEROES_INDEX:(HEROES_INDEX + 10)]
+        for j in row[0:5]:
+            if int(j) > 0:
                 index = get_hero_index(j, radiant=True)
-                X_in[i, index] = 1
-            for j in row[5:10]:
+                X[k, index] = 1
+        for j in row[5:10]:
+            if int(j) > 0:
                 index = get_hero_index(j, radiant=False)
-                X_in[i, index] = 1
-            Y_in[i, int(data[k + i, WINNER_INDEX])] = 1
-        X.append(torch.tensor(X_in, device=device).float())
-        Y.append(torch.tensor(Y_in, device=device).float())
-        k += batch_size
+                X[k, index] = 1
+        Y[k, int(data[k, WINNER_INDEX])] = 1
     
     return X, Y
 
@@ -236,22 +313,20 @@ def get_performance(net, X_test, Y_test, threshold=0.0):
     error_sum = 0
     rmse_sum = 0
     with torch.no_grad():
-        for i in range(0, len(X_test)):
-            data, target = X_test[i], Y_test[i]
-            output = net(data)
-            for j in range(0, len(output)):
-                pred = output[j]
-                correct = target[j]
-                rating = (pred[0] - pred[1]) / (pred[0] + pred[1])
-                target_rating = 1 if correct[0] == 1 else -1
-                if (1 - abs(rating) >= threshold):
-                    if (target_rating == 1 and rating >= 0) or (target_rating == -1 and rating <= 0):
-                        n_correct += 1
-                    n_thresh += 1
+        output = net(X_test)
+        for j in range(0, len(output)):
+            pred = output[j]
+            correct = Y_test[j]
+            rating = (pred[0] - pred[1]) / (pred[0] + pred[1])
+            target_rating = 1 if correct[0] == 1 else -1
+            if (1 - abs(rating) >= threshold):
+                if (target_rating == 1 and rating >= 0) or (target_rating == -1 and rating <= 0):
+                    n_correct += 1
+                n_thresh += 1
 
-                error_sum += (1/2) * abs(rating - target_rating)
-                rmse_sum += (1/2) * (rating - target_rating) * (rating - target_rating)
-                n_total += 1
+            error_sum += (1/2) * abs(rating - target_rating)
+            rmse_sum += (1/2) * (rating - target_rating) * (rating - target_rating)
+            n_total += 1
     
     accuracy = (n_correct / n_thresh) * 100
     error = error_sum / n_total
@@ -265,11 +340,9 @@ def update_csv(data, path):
     else:
         data.to_csv(path, mode="w", index=False, header=True)
 
-# Processes JSON formatted match data and returns a list containing the columns
-# for the data that would be placed in a CSV for the network to use.
-def extract_match_data(match_data, api='steampowered'):
-    # Parse the match data.
-    match = Match(match_data, api=api)
+# Processes match data and returns a list containing the columns for that data
+# that would be placed in a CSV for the network to use.
+def process_match_data(match):
     if match.match_id is None:
         return None
     
@@ -326,7 +399,8 @@ def main():
     parser.add_argument('--no_cache', action='store_true', default=False, help='Tensors will not be cached for the current run if this flag is used.')
     parser.add_argument('--eval_interval', metavar="N", type=int, default=1, help='The epoch interval at which to evaluate the network\'s performance while training.')
     parser.add_argument('--init_weights', action='store_true', default=False, help='Initializes weights to random values.')
-    parser.add_argument('--acc_thresh', type=float, default=0.0, help='A threshold value from 0.5 to use when evaluating the accuracy of the network.')
+    parser.add_argument('--sample', metavar="SIZE", type=int, default=0, help='Reduces the training data to the specified sample size.')
+    parser.add_argument("-test", action="store_true", default=False, help="Tests the network using the training dataq 'test.csv'.")
     parser.add_argument("-predict", metavar="ID", type=int, help="Predicts the result for a given match ID.")
     parser.add_argument("-yasp_dump", metavar="PATH", type=str, help="Processes data from the YASP 3.5 Million Data Dump dataset. This dataset can be obtained from here: https://academictorrents.com/details/5c5deeb6cfe1c944044367d2e7465fd8bd2f4acf")
     args = parser.parse_args()
@@ -348,7 +422,8 @@ def main():
                     continue
                     
                 # Append the match data to the list of records.
-                record = extract_match_data(match_data, api=args.api)
+                match = Match(match_data, api=api)
+                record = process_match_data(match, api=args.api)
                 if record is not None:
                     output.write(",".join(record) + "\n")
 
@@ -374,23 +449,25 @@ def main():
     elif args.train:
         train(args)
 
+    # Test the network.
+    elif args.test:
+        print("Testing model.")
+        model = NeuralNetwork("model.dat")
+        test_data = pd.read_csv("data/test.csv")
+        model.test(test_data)
+
     # Make a prediction.
     elif args.predict:
         # Fetch the data for the match.
         keys = get_keys("keys.json")
         match = fetch_match(args.predict, keys=keys)
 
-        # Parse the data for the given match.
-        data = pd.DataFrame.from_records([extract_match_data(match)], columns=COLUMNS)
-        
-        # Pass the prediction into the model.
-        net = torch.load("model.dat")
-        X, Y = create_tensors(data, 1)
-        output = net(X[0])
+        # Load the model and make the prediction.
+        model = NeuralNetwork("model.dat")
+        pred, rating = model.predict(match)
 
         # Print the actual result as well as the prediction.
-        print("Winner: {}".format("Radiant" if data.loc[0,'winner'] == 'R' else "Dire" if data.loc[0,'winner'] == 'D' else "Unknown"))
-        print("Prediction: {} ({})".format(get_normalised_output(output), "Radiant Adv." if output > 0.5 else "Dire Adv." if output < 0.5 else "Indeterminate"))
+        print_prediction(match.winner, pred, rating)
     
     # Process data from the YASP JSON dump dataset.
     elif args.yasp_dump:
@@ -405,7 +482,8 @@ def main():
                     
                     # Each line is a JSON object that contains data for a single match.
                     match_data = json.loads(line)
-                    record = extract_match_data(match_data, api=args.api)
+                    match = Match(match_data, api=api)
+                    record = process_match_data(match, api=args.api)
                     if record is not None:
                         output.write(",".join(record) + "\n")
 

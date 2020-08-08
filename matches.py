@@ -88,16 +88,16 @@ class Match:
 class Player:
     def __init__(self, data):
         self.account_id = None if 'account_id' not in data else data['account_id']
-        self.hero_id = data['hero_id']
-        self.kills = data['kills']
-        self.deaths = data['deaths']
-        self.assists = data['assists']
-        self.last_hits = data['last_hits']
-        self.denies = data['denies']
-        self.gpm = data['gold_per_min']
-        self.xpm = data['xp_per_min']
+        self.hero_id = None if 'hero_id' not in data else data['hero_id']
+        self.kills = 0 if 'kills' not in data else data['kills']
+        self.deaths = 0 if 'deaths' not in data else data['deaths']
+        self.assists = 0 if 'assists' not in data else data['assists']
+        self.last_hits = 0 if 'last_hits' not in data else data['last_hits']
+        self.denies = 0 if 'denies' not in data else data['denies']
+        self.gpm = 0 if 'gold_per_min' not in data else data['gold_per_min']
+        self.xpm = 0 if 'xp_per_min' not in data else data['xp_per_min']
 
-        player_slot = data['player_slot']
+        player_slot = 0 if 'player_slot' not in data else data['player_slot']
         self.team = Team.Dire if (player_slot >> 7) & 1 == 1 else Team.Radiant
         self.slot = player_slot & 0b111
 

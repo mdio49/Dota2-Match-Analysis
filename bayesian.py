@@ -116,40 +116,11 @@ def predict(model, match_id):
     pred, rating = model.predict(match)
     print_prediction(match.winner, pred, rating)
 
-# Tets the model on the given set of test data.
-def test(model, data, threshold=0.0):
-    # Iterate through each match in the test dataset.
-    n_correct = 0; n_total = 0
-    for index, match in data.iterrows():
-        # Get the heroes in the match.
-        R = [match['r1'], match['r2'], match['r3'], match['r4'], match['r5']]
-        D = [match['d1'], match['d2'], match['d3'], match['d4'], match['d5']]
-
-        # Get the actual winner.
-        target = Team.Radiant if match['winner'] == 'R' else Team.Dire if match['winner'] == 'D' else None
-        if target is None:
-            continue
-
-        # Make a prediction.
-        pred, rating = model.predict_heroes(R, D)
-        if rating < threshold:
-            continue
-        
-        # Test if the prediction matchesh the target.
-        if target == pred:
-            n_correct += 1
-        
-        n_total += 1
-    
-    threshold_str = (" (with threshold = %.2f)" % threshold) if threshold > 0 else ""
-    print(("Testing complete. Accuracy = %.2f%% (%d / %d)" % ((n_correct / n_total) * 100, n_correct, n_total)) + threshold_str)
-
 def main():
     # Parse command-line arguments.
     parser = argparse.ArgumentParser(description="Dota 2 Match Prediction Tool (Bayesian)")
     parser.add_argument('-id', type=int, help='The match ID to predict.')
     parser.add_argument('-test', action="store_true", default=False, help='Tests the model.')
-    parser.add_argument('--threshold', type=float, default=0.0, help='The threshold rating to use when considering if the prediction is correct or not.')
     args = parser.parse_args()
 
     # Load or produce the look-up table.
@@ -172,7 +143,7 @@ def main():
     if args.test:
         print("Testing model.")
         test_data = pd.read_csv("data/test.csv")
-        test(model, test_data, threshold=args.threshold)
+        model.test(test_data)
     elif args.id:
         print("Making prediction.")
         predict(model, args.id)
