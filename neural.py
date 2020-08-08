@@ -28,10 +28,10 @@ class NeuralNetwork(Model):
         
         # Pass the prediction into the model.
         X, Y = create_tensors(data, 'cpu')
-        output = self.net(X)
+        output = self.net(X)[0]
 
         # Return the prediction.
-        pred = Team.Radiant if output[0,0] >= output[0,1] else Team.Dire
+        pred = Team.Radiant if output[0] >= output[1] else Team.Dire
         rating = get_normalised_output(output)
         return pred, rating
     
@@ -460,7 +460,13 @@ def main():
     elif args.predict:
         # Fetch the data for the match.
         keys = get_keys("keys.json")
-        match = fetch_match(args.predict, keys=keys)
+        match_data = fetch_match(args.predict, keys=keys)
+        if 'error' in match_data.keys():
+            print(f"Couldn't load match data: {match_data['error']}")
+            exit()
+
+        # Parse the match data.
+        match = Match(match_data)
 
         # Load the model and make the prediction.
         model = NeuralNetwork("model.dat")

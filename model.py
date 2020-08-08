@@ -44,9 +44,6 @@ class Model(ABC):
                         n_correct[i] += 1
                 
                     n_total[i] += 1
-            
-            if (index + 1) % 1000 == 0:
-                print("Completed: " + str(index + 1))
         
         # Format the accuracy strings.
         accuracy_str = [None] * Nt
